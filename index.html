@@ -282,7 +282,7 @@ body.is-open .hero-animate{animation:heroEnter 1.4s cubic-bezier(.19,1,.22,1) bo
 .ts-glow{transform-box:fill-box;transform-origin:center}
 @media(max-width:480px){.their-stars{width:min(78vw,300px);margin-bottom:26px}.ts-caption{font-size:.5rem;letter-spacing:.26em}}
 /*/their-stars*/
-</style>
+.wish-cta:disabled{opacity:.62;cursor:progress}</style>
 </head>
 <body class="locked">
   <a class="skip-link" href="#main">Skip to invitation</a>
@@ -455,18 +455,18 @@ body.is-open .hero-animate{animation:heroEnter 1.4s cubic-bezier(.19,1,.22,1) bo
               <label class="form-label" for="wishName">YOUR NAME</label><input type="text" id="wishName" placeholder="A friend with love…" maxlength="65" autocomplete="name" />
               <label class="form-label" for="wishMessage">YOUR WISH FOR THE COUPLE</label><textarea id="wishMessage" rows="3" maxlength="500" placeholder="May your love be as endless as the stars…"></textarea>
               <button type="button" id="releaseWish" class="wish-cta">Release your wish into the stars <span>✧</span></button>
-              <p class="small-explainer">A little star will rise here. You can then share your message with the family.</p>
+              <p class="small-explainer">A little star will rise here, and your wish goes straight to the couple.</p>
             </div>
             <div id="rsvpPane" role="tabpanel" aria-labelledby="rsvpTab" class="wish-pane" hidden>
               <label class="form-label" for="rsvpName">YOUR NAME</label><input type="text" id="rsvpName" placeholder="Your full name" maxlength="80" autocomplete="name" />
               <span class="form-label">WILL YOU BE JOINING US?</span>
               <div class="rsvp-choices"><label><input name="attending" type="radio" value="Joyfully attending" checked/><span>Joyfully attending ♡</span></label><label><input name="attending" type="radio" value="Sending love from afar"/><span>Sending love from afar ✧</span></label></div>
               <label class="form-label" for="rsvpNote">A NOTE FOR THE COUPLE <span>(OPTIONAL)</span></label><textarea id="rsvpNote" rows="2" placeholder="Can't wait to celebrate with you!" maxlength="350"></textarea>
-              <button type="button" id="sendRsvp" class="wish-cta">Prepare my reply <span>↗</span></button>
-              <p class="small-explainer">Your reply opens in WhatsApp for you to send. No details are submitted automatically.</p>
+              <button type="button" id="sendRsvp" class="wish-cta">Send my reply <span>↗</span></button>
+              <p class="small-explainer">Your reply goes straight to the couple. You can also share it on WhatsApp.</p>
             </div>
           </div>
-          <div class="wish-share" id="wishShare" hidden><span class="wish-share-icon">✦</span><p id="wishShareMessage">Your wish is shining.</p><div class="wish-share-actions"><button type="button" id="shareWhatsApp">Share via WhatsApp ↗</button><button type="button" id="copyWish">Copy message</button></div><p class="small-explainer">Your message isn't stored on this website.</p></div>
+          <div class="wish-share" id="wishShare" hidden><span class="wish-share-icon">✦</span><p id="wishShareMessage">Your wish is shining.</p><div class="wish-share-actions"><button type="button" id="shareWhatsApp">Share via WhatsApp ↗</button><button type="button" id="copyWish">Copy message</button></div><p class="small-explainer">Your message is sent privately to the couple.</p></div>
         </div>
       </section>
 
@@ -749,11 +749,56 @@ body.is-open .hero-animate{animation:heroEnter 1.4s cubic-bezier(.19,1,.22,1) bo
       setTimeout(() => mote.remove(), 5300);
     }
   }
-  function setMessage(message, isWish) {
+  // Google Apps Script web-app URL that emails each blessing and RSVP to the
+  // couple and logs it in a Google Sheet (tools/apps-script/Code.gs).
+  // Leave empty to fall back to WhatsApp sharing only.
+  const MESSAGE_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwfOKemXPhDtu3RwxoSBK8qxT0qBc0_llQkgP56Dy_qFi2JXxBlZ88BYBfLPRDiVZ7qqg/exec';
+  const SHARE_TEXT = {
+    wish: {
+      off: 'Your wish is shining among the stars ✨',
+      sending: 'Sending your wish to the couple…',
+      sent: 'Your wish is shining, and on its way to the couple ✨',
+      failed: 'Your wish is shining ✨ It couldn’t reach the couple just now, so please share it on WhatsApp.'
+    },
+    rsvp: {
+      off: 'Your reply is ready to share ♡',
+      sending: 'Sending your reply…',
+      sent: 'Your reply has reached the couple ♡',
+      failed: 'Your reply couldn’t be sent just now. Please share it on WhatsApp ♡'
+    }
+  };
+  const delivered = new Set();
+  async function sendToCouple(payload) {
+    const body = JSON.stringify(payload);
+    if (delivered.has(body)) return 'sent';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      // A plain-text body keeps this a "simple" request, so no CORS preflight.
+      const response = await fetch(MESSAGE_ENDPOINT, { method: 'POST', body, signal: controller.signal });
+      const result = await response.json();
+      if (!result.ok) return 'failed';
+      delivered.add(body);
+      return 'sent';
+    } catch (error) {
+      return 'failed';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  function setMessage(message, isWish, state = 'off') {
     preparedMessage = message;
-    $('#wishShareMessage').textContent = isWish ? 'Your wish is shining among the stars ✨' : 'Your reply is ready to share ♡';
+    $('#wishShareMessage').textContent = SHARE_TEXT[isWish ? 'wish' : 'rsvp'][state];
     $('#wishShare').hidden = false;
     $('#wishShare').scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  }
+  async function deliver(button, message, isWish, payload) {
+    if (!MESSAGE_ENDPOINT) { setMessage(message, isWish); return; }
+    setMessage(message, isWish, 'sending');
+    button.disabled = true;
+    const state = await sendToCouple(payload);
+    button.disabled = false;
+    if (preparedMessage === message) $('#wishShareMessage').textContent = SHARE_TEXT[isWish ? 'wish' : 'rsvp'][state];
   }
   $('#releaseWish').addEventListener('click', () => {
     const name = $('#wishName').value.trim();
@@ -764,14 +809,16 @@ body.is-open .hero-animate{animation:heroEnter 1.4s cubic-bezier(.19,1,.22,1) bo
     const theirStars = document.getElementById('theirStars');
     if (theirStars) { theirStars.classList.remove('is-wished'); void theirStars.offsetWidth; theirStars.classList.add('is-wished'); setTimeout(() => theirStars.classList.remove('is-wished'), 3200); }
     /*/their-stars*/
-        setMessage(`A wedding wish for Sherwin & Dr Archana ✨\n\n${wish}\n\nWith love,\n${name || 'A well-wisher'}`, true);
+    deliver($('#releaseWish'), `A wedding wish for Sherwin & Dr Archana ✨\n\n${wish}\n\nWith love,\n${name || 'A well-wisher'}`, true,
+      { type: 'wish', name, message: wish });
   });
   $('#sendRsvp').addEventListener('click', () => {
     const name = $('#rsvpName').value.trim();
     if (!name) { $('#rsvpName').focus(); showToast('Please enter your name for the reply.'); return; }
     const status = $('input[name="attending"]:checked').value;
     const note = $('#rsvpNote').value.trim();
-    setMessage(`Wedding RSVP — Sherwin & Dr Archana\n\nName: ${name}\nResponse: ${status}${note ? '\nMessage: ' + note : ''}\n\nWedding: 27 November 2026, Ambernath`, false);
+    deliver($('#sendRsvp'), `Wedding RSVP — Sherwin & Dr Archana\n\nName: ${name}\nResponse: ${status}${note ? '\nMessage: ' + note : ''}\n\nWedding: 27 November 2026, Ambernath`, false,
+      { type: 'rsvp', name, attending: status, message: note });
   });
   // Set this to an India-format phone number (digits only, e.g. 919876543210)
   // when the family chooses where guests should send WhatsApp replies.
